@@ -23,6 +23,7 @@ struct MIPS_Architecture
 	std::unordered_map<std::string, int> registerMap, address;
 	static const int MAX = (1 << 20);
 	int data[MAX >> 2] = {0};
+	int reg_flags[32];
 	std::vector<std::vector<std::string>> commands;
 	std::vector<int> commandCount;
 	enum exit_code
@@ -48,6 +49,8 @@ struct MIPS_Architecture
 		registerMap["$v1"] = 3;
 		for (int i = 0; i < 4; ++i)
 			registerMap["$a" + std::to_string(i)] = i + 4;
+		for(int i = 0;i < 32;i++)
+		    reg_flags[i] = 0;
 		for (int i = 0; i < 8; ++i)
 			registerMap["$t" + std::to_string(i)] = i + 8, registerMap["$s" + std::to_string(i)] = i + 16;
 		registerMap["$t8"] = 24;
@@ -375,16 +378,50 @@ struct MIPS_Architecture
 		}
 
 		int clockCycles = 0;
+		std::vector<std::string> &command = commands[0];
+		std::vector<std::string> &commandbuffer = commands[0];
+		int  IF_flag = 1;
+		std::string command0,command1,command2,command3;
+		std::string command0buffer,command1buffer,command2buffer,command3buffer;
+		int DEC_flag = 1;
+		int rest_flag = 1;
 		while (PCcurr < commands.size())
 		{
 			++clockCycles;
-			std::vector<std::string> &command = commands[PCcurr];
-			if (instructions.find(command[0]) == instructions.end())
+			if (IF_flag){
+			command = commands[PCcurr];
+			if(DEC_flag){
+			commandbuffer = command;
+			IF_flag = 1;
+			}
+			else{
+			IF_flag = 0;
+			} 
+			}
+			if (DEC_flag){
+			if (instructions.find(commandbuffer[0]) == instructions.end())
 			{
 				handleExit(SYNTAX_ERROR, clockCycles);
 				return;
 			}
-			exit_code ret = (exit_code) instructions[command[0]](*this, command[1], command[2], command[3]);
+			command0 = commandbuffer[0];
+			command1 = commandbuffer[1];
+			command2 = commandbuffer[2];
+			command3 = commandbuffer[3];
+			if(rest_flag){
+			command0buffer = command0;
+			command1buffer = command1;
+			command2buffer = command2;
+			command3buffer = command3;
+			DEC_flag = 1;
+			}
+			else{
+			DEC_flag = 0;
+			} 
+			}
+			
+			if(rest_flag){
+			exit_code ret = (exit_code) instructions[command0buffer](*this, command1buffer, command2buffer, command3buffer);
 			if (ret != SUCCESS)
 			{
 				handleExit(ret, clockCycles);
@@ -393,7 +430,7 @@ struct MIPS_Architecture
 			++commandCount[PCcurr];
 			PCcurr = PCnext;
 			printRegisters(clockCycles);
-		}
+	}}
 		handleExit(SUCCESS, clockCycles);
 	}
 
@@ -406,6 +443,7 @@ struct MIPS_Architecture
 			std::cout << registers[i] << ' ';
 		std::cout << std::dec << '\n';
 	}
+
 };
 
 #endif
