@@ -47,7 +47,6 @@ struct MIPS_Architecture {
                         {"lw",   &MIPS_Architecture::lw},
                         {"sw",   &MIPS_Architecture::sw},
                         {"addi", &MIPS_Architecture::addi}};
-
         for (int i = 0; i < 32; ++i)
             registerMap["$" + std::to_string(i)] = i;
         registerMap["$zero"] = 0;
@@ -68,7 +67,6 @@ struct MIPS_Architecture {
         registerMap["$sp"] = 29;
         registerMap["$s8"] = 30;
         registerMap["$ra"] = 31;
-
         constructCommands(file);
         commandCount.assign(commands.size(), 0);
     }
@@ -83,11 +81,13 @@ struct MIPS_Architecture {
              {"j",    6},
              {"lw",   7},
              {"sw",   8},
-             {"addi", 9}};
+             {"addi", 9},
+             {"sll",  10},
+             {"srl",  11},
+             {"last", -1}};
 
 
     int instructionDecode(std::vector<std::string> &command) {
-
         return instructions2[command[0]];
     }
 
@@ -107,14 +107,26 @@ struct MIPS_Architecture {
             case 5: // slt
                 result = rsValue < rtValue ? 1 : 0;
                 break;
-            case 9: // addi
+            case 9:  // addi
                 result = rtValue + immediate;
                 break;
-            case 7: // addi
+            case 3: //beq
+                result = rsValue == rtValue ? 1 : 0;
+                break;
+            case 4: //beq
+                result = rsValue != rtValue ? 1 : 0;
+                break;
+            case 7: // lw
                 result = rtValue + immediate;
                 break;
-            case 8: // addi
+            case 8: // sw
                 result = rtValue + immediate;
+                break;
+            case 10:
+                result = rtValue << immediate;
+                break;
+            case 11:
+                result = rtValue >> immediate;
                 break;
             default:
                 result = immediate; // patani kab kaam aajae
@@ -130,7 +142,6 @@ struct MIPS_Architecture {
 
 
     void write_mem(int datain, int address) {
-
         data[address] = datain;
 
     }
@@ -344,7 +355,7 @@ struct MIPS_Architecture {
         // strip until before the comment begins
         line = line.substr(0, line.find('#'));
         std::vector<std::string> command;
-        boost::tokenizer<boost::char_separator<char>> tokens(line, boost::char_separator<char>(", \t"));
+        boost::tokenizer<boost::char_separator<char>> tokens(line, boost::char_separator<char>(", \t()"));
         for (auto &s: tokens)
             command.push_back(s);
         // empty line or a comment only line
@@ -418,16 +429,14 @@ struct MIPS_Architecture {
         alu_result_buffer = 0;
         memory_out = 0;
         memory_out_buffer = 0;
+        int branch_flag = 0;
         int wb_flag = 1;
         int dec_flag = 1;
         int mem_flag = 1;
         int alu_flag = 1;
         printRegisters(clockCycles);
         ++commandCount[0];
-        while (PCcurr < (commands.size() + 10)) {
-
-            std::cout << registers[registerMap["$s1"]] << "\n";
-
+        while (clockCycles < 100) {
             ++clockCycles;
 
 
@@ -436,17 +445,21 @@ struct MIPS_Architecture {
             switch (instructions2[mem_op]) {
                 case 7:
                     registers[registerMap[mem_reg]] = memory_out;
+                    if (reg_flags[registerMap[mem_reg]]) { reg_flags[registerMap[mem_reg]] = 0; }
                     break;
-                case 8 :
-
+                case 3:
+                case 4:
+                case 6:
+                case 8:
                     break;
                 default:
                     registers[registerMap[mem_reg]] = alu_result_buffer;
-
+                    if (reg_flags[registerMap[mem_reg]]) { reg_flags[registerMap[mem_reg]] = 0; }
                     break;
             }
+            if (instructions2[mem_op] == -1) { break; }
             std::cout << mem_op << " done\n";
-            reg_flags[registerMap[mem_reg]] = 0;
+
 
             //mem stage
 
@@ -454,16 +467,14 @@ struct MIPS_Architecture {
                 mem_op = mem_op_buffer;
                 mem_reg = mem_reg_buffer;
                 alu_result_buffer = alu_result;
-                alu_flag = 1;
+
+                //alu_flag = 1;
                 switch (instructions2[mem_op_buffer]) {
                     case 8:
-                        if (!reg_flags[registerMap[mem_reg_buffer]]) {
-                            data[alu_result] = registers[registerMap[mem_reg_buffer]];
-
-                        } else { alu_flag = 0; }
+                        data[alu_result / 4] = registers[registerMap[mem_reg_buffer]];
                         break;
                     case 7:
-                        memory_out = data[alu_result];
+                        memory_out = data[alu_result / 4];
                         break;
                     default:
                         memory_out = memory_out;
@@ -475,21 +486,34 @@ struct MIPS_Architecture {
 
             //alu stage
 
+            if (branch_flag) {
+                branch_flag = 0;
+                goto alu_skip;
+            }
             if (alu_flag) {
                 mem_op_buffer = command0;
                 mem_reg_buffer = command1;
                 //requires comman parameters of previous instruction
                 switch (instructions2[command0]) {
-
-                    case 9:
-                        alu_result = aluExecute(0, registers[registerMap[command2]], stoi(command3), 9);
-                        break;
                     case 7:
-                        alu_result = aluExecute(0, registers[registerMap[command2]], stoi(command3), 7);
-                        break;
                     case 8:
-                        alu_result = aluExecute(0, registers[registerMap[command2]], stoi(command3), 8);
-
+                    case 10:
+                    case 11:
+                    case 9:
+                        alu_result = aluExecute(0, registers[registerMap[command2]], stoi(command3),
+                                                instructions2[command0]);
+                        break;
+                    case 3:
+                    case 4:
+                        branch_flag = aluExecute(registers[registerMap[command1]], registers[registerMap[command2]], 0,
+                                                 instructions2[command0]);
+                        if (branch_flag) {
+                            --commandCount[PCcurr - 1];
+                            PCcurr = address[command3];
+                            goto dec_skip;
+                        }
+                        std::cout << command3 << "\n";
+                    case -1:
                         break;
                     default:
                         alu_result = aluExecute(registers[registerMap[command2]], registers[registerMap[command3]], 0,
@@ -497,48 +521,73 @@ struct MIPS_Architecture {
                         break;
                 }
                 dec_flag = 1;
-
                 std::cout << command0 << " alu\n";
 
-            } else { dec_flag = 0; }
 
-
+            }
+            alu_skip:
 
             //dec stage
 
             if (dec_flag) {
-
-
-                if (instructions.find(command[0]) == instructions.end()) {
-                    handleExit(SYNTAX_ERROR, clockCycles);
-                    return;
-                }
-
                 if_flag = 1;
                 switch (instructions2[command[0]]) {
-                    case 7:
-                        if (!(reg_flags[registerMap[command[2]]])) {
-                            command0 = command[0];
-                            command3 = command[3];
-                            command2 = command[2];
-                            command1 = command[1];
-                        } else { if_flag = 0; }
-                        break;
-                    case 8:
-                        if (!(reg_flags[registerMap[command[2]]])) {
-                            command0 = command[0];
-                            command3 = command[3];
-                            command2 = command[2];
-                            command1 = command[1];
-                        } else { if_flag = 0; }
-                        break;
+                    //addi,srl and  sll
                     case 9:
+                    case 10:
+                    case 11:
                         if (!(reg_flags[registerMap[command[2]]])) {
                             command0 = command[0];
                             command3 = command[3];
                             command2 = command[2];
                             command1 = command[1];
-                        } else { if_flag = 0; }
+                            reg_flags[registerMap[command[1]]] = 1;
+                            alu_flag = 1;
+                        } else {
+                            alu_flag = 0;
+                            if_flag = 0;
+                        }
+                        break;
+                    case 6:
+                        std::cout << command[1] << "\n";
+                        branch_flag = 1;
+                        PCcurr = address[command[1]];
+                        goto dec_skip;
+
+                        //memory_ops
+                    case 7:
+                        if (!(reg_flags[registerMap[command[3]]])) { reg_flags[registerMap[command[1]]] = 1; }
+                    case 8:
+                        if (!(reg_flags[registerMap[command[3]]])) {
+                            command0 = command[0];
+                            command3 = command[2];
+                            command2 = command[3];
+                            command1 = command[1];
+                            alu_flag = 1;
+                        } else {
+                            alu_flag = 0;
+                            if_flag = 0;
+                        }
+                        break;
+
+                        //r_type
+                    case -1:
+                        command0 = command[0];
+                        alu_flag = 1;
+                        if_flag = 0;
+                        break;
+                    case 3:
+                    case 4:
+                        if (!(reg_flags[registerMap[command[1]]]) && !(reg_flags[registerMap[command[2]]])) {
+                            command0 = command[0];
+                            command3 = command[3];
+                            command2 = command[2];
+                            command1 = command[1];
+                            alu_flag = 1;
+                        } else {
+                            alu_flag = 0;
+                            if_flag = 0;
+                        }
                         break;
                     default:
                         if (!(reg_flags[registerMap[command[2]]]) && !(reg_flags[registerMap[command[3]]])) {
@@ -546,37 +595,36 @@ struct MIPS_Architecture {
                             command3 = command[3];
                             command2 = command[2];
                             command1 = command[1];
-                        } else { if_flag = 0; }
+                            reg_flags[registerMap[command[1]]] = 1;
+                            alu_flag = 1;
+                        } else {
+                            alu_flag = 0;
+                            if_flag = 0;
+                        }
                         break;
 
-                }
-                switch (instructions2[command[0]]) {
-                    case 8:
-                        break;
-                    default:
-                        reg_flags[registerMap[command[1]]] = 1;
-                        break;
                 }
 
                 std::cout << command[0] << " decode\n";
             } else { if_flag = 0; }
+            dec_skip:
 
             //if stage
             if (if_flag) {
                 if (PCcurr < (commands.size())) {
                     command = commands[PCcurr];
+                } else {
+                    command[0] = "last";
+                    if_flag = 0;
                 }
                 ++commandCount[PCcurr];
                 PCnext = PCcurr + 1;
                 PCcurr = PCnext;
-
                 std::cout << command[0] << " if\n";
             }
-
-
             printRegisters(clockCycles);
         }
-        handleExit(SUCCESS, clockCycles);
+        handleExit(SUCCESS, clockCycles - 1);
     }
 
     // print the register data in hexadecimal
